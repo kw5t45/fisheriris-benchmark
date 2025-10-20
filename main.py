@@ -2,8 +2,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
+import csv
+import torch.linalg as linalg
+
+
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+
+
+
 #test
 # -------------------------------
 # 1️⃣ Load Dataset
@@ -41,12 +48,50 @@ X_test = torch.tensor(X_test, dtype=torch.float32)
 # 2 Define a simple MLP
 # -------------------------------
 class NeuralNetwork(nn.Module):
-    def __init__(self, hidden_neurons=10):
+    def __init__(self, hidden_neurons2 ,hidden_neurons):
+        layers = [nn.Linear(4, hidden_neurons)]
+
+        if hidden_neurons2 > 0:
+            layers.append(nn.Linear(hidden_neurons, hidden_neurons2))
+            layers.append(nn.Linear(hidden_neurons2, 3))
+        else:
+            layers.append(nn.Linear(hidden_neurons, 3))
+
+        self.model = nn.Sequential(*layers)
         super(NeuralNetwork, self).__init__()
         self.model = nn.Sequential(
             nn.Linear(4, hidden_neurons),
-            nn.Linear(hidden_neurons, 3)
+            nn.Linear(hidden_neurons,hidden_neurons2),
+            nn.Linear(hidden_neurons2, 3)
         )
+
+
+
+    def forward(self, x):
+        return self.model(x)
+
+class NeuralNetwork(nn.Module):
+    def __init__(self, hidden_layers ):
+        """
+        input_size: int — number of input features
+        hidden_layers: list[int] — list with the number of neurons per hidden layer
+        output_size: int — number of output neurons
+        """
+        super(NeuralNetwork, self).__init__()
+
+        layers = []
+        prev_size = 4
+
+        for hidden_size in hidden_layers:
+            if hidden_size > 0:
+                layers.append(nn.Linear(prev_size, hidden_size))
+                layers.append(nn.ReLU())  # optional activation
+                prev_size = hidden_size
+
+        # Final output layer
+        layers.append(nn.Linear(prev_size, 3))
+
+        self.model = nn.Sequential(*layers)
 
     def forward(self, x):
         return self.model(x)
@@ -55,49 +100,114 @@ class NeuralNetwork(nn.Module):
 # -------------------------------
 # 3. Initialize model, loss, optimizer
 # -------------------------------
-model = NeuralNetwork(hidden_neurons=10)
-criterion = nn.MSELoss()
-optimizer = optim.SGD(model.parameters(), lr=0.01)
+
+resLoss=[]
+resTestLoss=[]
+for i in range(1,6):
+    hLyeres = []
+    for j in range(1,6):
+        hLyeres.append(i)
+        print(hLyeres)
+        model = NeuralNetwork(hLyeres)
+        criterion = nn.MSELoss()
+        optimizer = optim.SGD(model.parameters(), lr=0.01)
 
 
-# -------------------------------
-# 4️⃣ Training loop
-# -------------------------------
-epochs = 400
-for epoch in range(epochs):
-    # Forward pass
-    outputs = model(X_train)
-    loss = criterion(outputs, y_train_onehot)
+        # -------------------------------
+        # 4️⃣ Training loop
+        # -------------------------------
+        epochs = 400
+        for epoch in range(epochs):
+            # Forward pass
+            outputs = model(X_train)
+            loss = criterion(outputs, y_train_onehot)
 
-    # Backward pass
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+            # Backward pass
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-    if (epoch + 1) % 20 == 0:
+
         with torch.no_grad():  # no gradients for evaluation
             test_outputs = model(X_test)
             test_loss = criterion(test_outputs, y_test_onehot)
 
-            print(f"Epoch [{epoch + 1}/{epochs}], Train Loss: {loss.item():.4f}, Test Loss: {test_loss.item():.4f}")
+            resLoss.append(loss.item())
+            resTestLoss.append(test_loss.item())
+
+            #print(f"Epoch [{epoch + 1}/{epochs}], Train Loss: {loss.item():.4f}, Test Loss: {test_loss.item():.4f}")
 
 # -------------------------------
 # 4️⃣.5  Training loop of Extreme Learning Machine
 # -------------------------------
-            # ua to grapsei o kapas
+class ExtremeLearningMachine:
+    def __init__(self, hidden_neurons, activation=torch.relu):
+        """
+        input_size: number of input features
+        hidden_neurons: number of neurons in hidden layer
+        output_size: number of output neurons
+        activation: activation function (default ReLU)
+        """
+        self.input_size = 4
+        self.hidden_neurons = hidden_neurons
+        self.output_size = 3
+        self.activation = activation
+
+        # Random weights and bias for input → hidden
+        self.W = torch.randn(4, hidden_neurons)
+        self.b = torch.randn(hidden_neurons)
+
+        # Output weights (to be learned analytically)
+        self.beta = None
+
+    def _hidden_output(self, X):
+        """Compute hidden layer output"""
+        H = self.activation(X @ self.W + self.b)
+        return H
+
+    def fit(self, X, y):
+        """
+        Train ELM by computing output weights (beta)
+        using Moore-Penrose pseudoinverse
+        """
+        H = self._hidden_output(X)
+        # Compute pseudoinverse and solve: beta = pinv(H) * y
+        self.beta = linalg.pinv(H) @ y
+
+    def predict(self, X):
+        """Make predictions"""
+        H = self._hidden_output(X)
+        return H @ self.beta
 
 
-# -------------------------------
-# 5️⃣ Simple prediction
-# -------------------------------
-# Predict on the first test sample
-test_sample = X_test[0].unsqueeze(0)  # add batch dimension
-pred = model(test_sample)
-print(test_sample, pred)
-# Convert output to class
-predicted_class = torch.argmax(pred, dim=1).item()
-true_class = torch.argmax(y_test_onehot[0]).item()
 
-print("\nPredicted class:", label_encoder.inverse_transform([predicted_class])[0])
-print("True class:     ", label_encoder.inverse_transform([true_class])[0])
 
+
+
+
+# Create ELM with user-defined hidden neurons
+exlm_losses=[]
+for hidden_neurons in range(1,26):  # ← user can change this freely
+
+    elm = ExtremeLearningMachine(hidden_neurons=hidden_neurons,
+                                 activation=torch.relu)
+    elm.fit(X_train, y_train_onehot)
+    pred = elm.predict(X_test)
+    pred = torch.softmax(pred, dim=1)
+    criterion = nn.MSELoss()       # create the loss function
+    loss = criterion(pred, y_test_onehot)   # compute the actual loss
+    # print("Loss :",loss)
+
+    exlm_losses.append(loss.item())
+
+# Create a DataFrame
+df = pd.DataFrame({
+    'Result (Train) Loss': resLoss,
+
+    'Test Loss': resTestLoss,
+
+    'ExLM Loss': exlm_losses
+})
+
+# Save to CSV
+df.to_csv('data.csv', index=False)
