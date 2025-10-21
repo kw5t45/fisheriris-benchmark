@@ -2,19 +2,15 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import pandas as pd
-import csv
 import torch.linalg as linalg
-
-
+import time
+import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.model_selection import KFold
 
 
-
-#test
-# -------------------------------
-# 1️⃣ Load Dataset
-# -------------------------------
+# dataset loading
 dataset = pd.read_csv('IRIS.csv')
 
 x_data = dataset.drop('species', axis=1)
@@ -29,46 +25,10 @@ scaler = StandardScaler()
 x_scaled = scaler.fit_transform(x_data)
 
 # Train-test split
-X_train, X_test, y_train, y_test = train_test_split(
-    x_scaled, y_encoded, test_size=0.2, random_state=42
-)
-
-# One-hot encode targets for MSELoss
-y_train_onehot = torch.tensor(pd.get_dummies(y_train).values, dtype=torch.float32)
-y_test_onehot = torch.tensor(pd.get_dummies(y_test).values, dtype=torch.float32)
-
-# Convert inputs to tensors
-X_train = torch.tensor(X_train, dtype=torch.float32)
-X_test = torch.tensor(X_test, dtype=torch.float32)
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
 
 
-
-
-# -------------------------------
-# 2 Define a simple MLP
-# -------------------------------
-class NeuralNetwork(nn.Module):
-    def __init__(self, hidden_neurons2 ,hidden_neurons):
-        layers = [nn.Linear(4, hidden_neurons)]
-
-        if hidden_neurons2 > 0:
-            layers.append(nn.Linear(hidden_neurons, hidden_neurons2))
-            layers.append(nn.Linear(hidden_neurons2, 3))
-        else:
-            layers.append(nn.Linear(hidden_neurons, 3))
-
-        self.model = nn.Sequential(*layers)
-        super(NeuralNetwork, self).__init__()
-        self.model = nn.Sequential(
-            nn.Linear(4, hidden_neurons),
-            nn.Linear(hidden_neurons,hidden_neurons2),
-            nn.Linear(hidden_neurons2, 3)
-        )
-
-
-
-    def forward(self, x):
-        return self.model(x)
+# adjustable mlp
 
 class NeuralNetwork(nn.Module):
     def __init__(self, hidden_layers ):
@@ -85,11 +45,12 @@ class NeuralNetwork(nn.Module):
         for hidden_size in hidden_layers:
             if hidden_size > 0:
                 layers.append(nn.Linear(prev_size, hidden_size))
-                layers.append(nn.ReLU())  # optional activation
+                layers.append(nn.Sigmoid())  # optional activation
                 prev_size = hidden_size
 
         # Final output layer
         layers.append(nn.Linear(prev_size, 3))
+        layers.append(nn.Softmax(dim=1))
 
         self.model = nn.Sequential(*layers)
 
@@ -97,51 +58,58 @@ class NeuralNetwork(nn.Module):
         return self.model(x)
 
 
-# -------------------------------
-# 3. Initialize model, loss, optimizer
-# -------------------------------
+# mlp training
 
 resLoss=[]
 resTestLoss=[]
+
+start = time.time()
 for i in range(1,6):
     hLyeres = []
     for j in range(1,6):
         hLyeres.append(i)
-        print(hLyeres)
         model = NeuralNetwork(hLyeres)
         criterion = nn.MSELoss()
         optimizer = optim.SGD(model.parameters(), lr=0.01)
 
+        fold_train_losses = []
+        fold_val_losses = []
 
-        # -------------------------------
-        # 4️⃣ Training loop
-        # -------------------------------
-        epochs = 400
-        for epoch in range(epochs):
-            # Forward pass
-            outputs = model(X_train)
-            loss = criterion(outputs, y_train_onehot)
+        # 🔹 K-Fold training
+        for train_idx, val_idx in kf.split(x_scaled):
+            X_train_fold = torch.tensor(x_scaled[train_idx], dtype=torch.float32)
+            X_val_fold = torch.tensor(x_scaled[val_idx], dtype=torch.float32)
 
-            # Backward pass
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            y_train_fold = torch.tensor(pd.get_dummies(y_encoded[train_idx]).values, dtype=torch.float32)
+            y_val_fold = torch.tensor(pd.get_dummies(y_encoded[val_idx]).values, dtype=torch.float32)
 
+            # train the model
+            for epoch in range(1000):
+                outputs = model(X_train_fold)
+                loss = criterion(outputs, y_train_fold)
 
-        with torch.no_grad():  # no gradients for evaluation
-            test_outputs = model(X_test)
-            test_loss = criterion(test_outputs, y_test_onehot)
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
 
-            resLoss.append(loss.item())
-            resTestLoss.append(test_loss.item())
+            # evaluate on validation fold
+            with torch.no_grad():
+                val_outputs = model(X_val_fold)
+                val_loss = criterion(val_outputs, y_val_fold)
 
-            #print(f"Epoch [{epoch + 1}/{epochs}], Train Loss: {loss.item():.4f}, Test Loss: {test_loss.item():.4f}")
+            fold_train_losses.append(loss.item())
+            fold_val_losses.append(val_loss.item())
 
-# -------------------------------
-# 4️⃣.5  Training loop of Extreme Learning Machine
-# -------------------------------
+        # average fold losses
+        resLoss.append(sum(fold_train_losses)/len(fold_train_losses))
+        resTestLoss.append(sum(fold_val_losses)/len(fold_val_losses))
+
+end = time.time()  # ⏱️ record end time
+print(f"MLPs total training took {end - start:.4f} seconds")
+print(resTestLoss)
+# elm initialization
 class ExtremeLearningMachine:
-    def __init__(self, hidden_neurons, activation=torch.relu):
+    def __init__(self, hidden_neurons, activation=torch.sigmoid):
         """
         input_size: number of input features
         hidden_neurons: number of neurons in hidden layer
@@ -181,33 +149,52 @@ class ExtremeLearningMachine:
 
 
 
+exlm_losses = []
+num_classes = 3
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+criterion = nn.MSELoss()  # define once
 
+exlm_start_time = time.time()
 
+for hidden_neurons in range(1, 26):  # 1 to 25
+    fold_losses = []  # store loss for each fold
 
+    for train_index, val_index in kf.split(x_scaled):
 
-# Create ELM with user-defined hidden neurons
-exlm_losses=[]
-for hidden_neurons in range(1,26):  # ← user can change this freely
+        X_train_fold = torch.tensor(x_scaled[train_index], dtype=torch.float32)
+        X_val_fold = torch.tensor(x_scaled[val_index], dtype=torch.float32)
 
-    elm = ExtremeLearningMachine(hidden_neurons=hidden_neurons,
-                                 activation=torch.relu)
-    elm.fit(X_train, y_train_onehot)
-    pred = elm.predict(X_test)
-    pred = torch.softmax(pred, dim=1)
-    criterion = nn.MSELoss()       # create the loss function
-    loss = criterion(pred, y_test_onehot)   # compute the actual loss
-    # print("Loss :",loss)
+        y_train_fold = torch.tensor(pd.get_dummies(y_encoded[train_index]).values, dtype=torch.float32)
+        y_val_fold = torch.tensor(pd.get_dummies(y_encoded[val_index]).values, dtype=torch.float32)
 
-    exlm_losses.append(loss.item())
+        # initialize and train ELM on this fold
+        elm = ExtremeLearningMachine(
+            hidden_neurons=hidden_neurons,
+            activation=torch.sigmoid
+        )
+        elm.fit(X_train_fold, y_train_fold)
+
+        # predict and compute loss
+        pred = elm.predict(X_val_fold)
+        pred = torch.softmax(pred, dim=1)
+        loss = criterion(pred, y_val_fold)
+
+        fold_losses.append(loss.item())
+
+    # average loss over all folds for this number of neurons
+    exlm_losses.append(np.mean(fold_losses))
+
+exlm_total_time = time.time() - exlm_start_time
+print("Cross-validated ELM losses:", exlm_losses)
+print("Total time:", exlm_total_time)
 
 # Create a DataFrame
 df = pd.DataFrame({
-    'Result (Train) Loss': resLoss,
-
-    'Test Loss': resTestLoss,
-
-    'ExLM Loss': exlm_losses
+    'MLP Train Loss': resLoss,
+    'MLP Test Loss': resTestLoss,
+    'ELM Loss': exlm_losses
 })
 
 # Save to CSV
-df.to_csv('data.csv', index=False)
+#df.to_csv('full.csv', index=False, float_format='%.3f')
+print(df)
